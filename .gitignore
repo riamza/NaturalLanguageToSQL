@@ -1,0 +1,14 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Environment variables
+.env
+RRDesign.Api/wwwroot/uploads/**
+!RRDesign.Api/wwwroot/uploads/**/.gitkeep
+!RRDesign.Api/wwwroot/uploads/**/.gitkeep
