@@ -1,4 +1,6 @@
+using System.Diagnostics;
 using Application.Interfaces;
+using Core.Models;
 using Microsoft.AspNetCore.Mvc;
 
 namespace Api.Controllers;
@@ -7,63 +9,72 @@ namespace Api.Controllers;
 [Route("api/[controller]")]
 public class QueryController : ControllerBase
 {
-    private readonly INaturalLanguageProcessor _nlpProcessor;
-    private readonly IValidationEngine _validationEngine;
-    private readonly ISqlBuilder _sqlBuilder;
-    private readonly IQueryExecutionService _queryExecutionService;
-    private readonly ILogger<QueryController> _logger;
+    private readonly IQueryOrchestratorService _orchestratorService;
+    private readonly IQueryHistoryService _historyService;
+    private readonly IDatabaseSchemaService _schemaService;
 
     public QueryController(
-        INaturalLanguageProcessor nlpProcessor,
-        IValidationEngine validationEngine,
-        ISqlBuilder sqlBuilder,
-        IQueryExecutionService queryExecutionService,
-        ILogger<QueryController> logger)
+        IQueryOrchestratorService orchestratorService,
+        IQueryHistoryService historyService,
+        IDatabaseSchemaService schemaService)
     {
-        _nlpProcessor = nlpProcessor;
-        _validationEngine = validationEngine;
-        _sqlBuilder = sqlBuilder;
-        _queryExecutionService = queryExecutionService;
-        _logger = logger;
+        _orchestratorService = orchestratorService;
+        _historyService = historyService;
+        _schemaService = schemaService;
+    }
+
+    [HttpGet("schema")]
+    public async Task<IActionResult> GetSchema()
+    {
+        var schema = await _schemaService.GetDatabaseSchemaJsonAsync();
+        return Ok(schema);
+    }
+
+    [HttpGet("history")]
+    public async Task<IActionResult> GetHistory()
+    {
+        var history = await _historyService.GetHistoryAsync();
+        return Ok(history);
+    }
+
+    public class FeedbackRequest { public string Feedback { get; set; } = string.Empty; }
+
+    [HttpPut("{id}/feedback")]
+    public async Task<IActionResult> UpdateFeedback(Guid id, [FromBody] FeedbackRequest req)
+    {
+        await _historyService.UpdateFeedbackAsync(id, req.Feedback);
+        return Ok();
     }
 
     [HttpPost("ask")]
     public async Task<IActionResult> Ask([FromBody] QueryRequest request)
     {
-        if (string.IsNullOrWhiteSpace(request?.Prompt))
-            return BadRequest("Prompt cannot be empty");
-
-        try
+        var response = await _orchestratorService.AskAsync(request.Prompt);
+        
+        if (!response.IsSuccess)
         {
-            // 1. LLM converts NL -> IR
-            var ir = await _nlpProcessor.TranslateToIrAsync(request.Prompt);
-
-            // 2. Validation Engine
-            var validation = await _validationEngine.ValidateIrAsync(ir);
-            if (!validation.IsValid)
-            {
-                return BadRequest($"Unsafe or invalid intention detected: {validation.ErrorMessage}");
-            }
-
-            // 3. SQL Builder
-            var (sql, parameters) = _sqlBuilder.BuildSql(ir);
-            
-            _logger.LogInformation("Executing dynamically generated secure SQL: {Sql}", sql);
-
-            // 4. Execution Service
-            var results = await _queryExecutionService.ExecuteQueryAsync(sql, parameters);
-
-            return Ok(new { data = results, generatedSql = sql });
+            return StatusCode(response.StatusCode, response.ErrorMessage);
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error processing query.");
-            return StatusCode(500, "An error occurred while processing the request.");
-        }
+
+        return Ok(response.Data);
     }
-}
 
-public class QueryRequest
-{
-    public string Prompt { get; set; } = string.Empty;
+    public class ExecuteApprovedRequest
+    {
+        public QueryIr Ir { get; set; } = new();
+        public string OriginalPrompt { get; set; } = "Approved INSERT";
+    }
+
+    [HttpPost("execute-approved")]
+    public async Task<IActionResult> ExecuteApproved([FromBody] ExecuteApprovedRequest request)
+    {
+        var response = await _orchestratorService.ExecuteApprovedAsync(request.Ir, request.OriginalPrompt);
+
+        if (!response.IsSuccess)
+        {
+            return StatusCode(response.StatusCode, response.ErrorMessage);
+        }
+
+        return Ok(response.Data);
+    }
 }

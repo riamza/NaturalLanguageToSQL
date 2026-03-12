@@ -1,0 +1,157 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "dotnet build",
+			"type": "shell",
+			"command": "cd backend && dotnet build",
+			"isBackground": false
+		},
+		{
+			"label": "dotnet build",
+			"type": "shell",
+			"command": "cd backend ; dotnet clean ; dotnet build",
+			"isBackground": false
+		},
+		{
+			"label": "dotnet build clean",
+			"type": "shell",
+			"command": "cd backend ; dotnet clean ; dotnet build",
+			"isBackground": false
+		},
+		{
+			"label": "build-backend",
+			"type": "shell",
+			"command": "cd backend && dotnet build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build-backend",
+			"type": "shell",
+			"command": "cd backend; dotnet build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build-backend-2",
+			"type": "shell",
+			"command": "dotnet build backend/NlToSqlAssistant.slnx",
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build-backend-3",
+			"type": "shell",
+			"command": "dotnet build backend/NlToSqlAssistant.slnx",
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build-frontend",
+			"type": "shell",
+			"command": "cd frontend; npm run build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build-frontend-2",
+			"type": "shell",
+			"command": "cd frontend; npm run build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$tsc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build-backend",
+			"type": "shell",
+			"command": "cd backend; dotnet build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "build-backend-ps",
+			"type": "shell",
+			"command": "cd backend; dotnet build",
+			"isBackground": false,
+			"problemMatcher": [
+				"$msCompile"
+			],
+			"group": "build"
+		},
+		{
+			"label": "RunBackend",
+			"type": "shell",
+			"command": "dotnet run --project backend/Api",
+			"isBackground": true
+		},
+		{
+			"label": "TestAsk",
+			"type": "shell",
+			"command": "Invoke-RestMethod -Uri \"http://localhost:5071/api/query/ask\" -Method Post -Body '{\"prompt\":\"Insert this data into the employees table:\\n\\nId,FirstName,LastName,Department,Salary,HireDate\\n\\\"1\\\",\\\"John\\\",\\\"Doe\\\",\\\"IT\\\",\\\"75000\\\",\\\"2020-01-15T00:00:00Z\\\"\\n\\\"2\\\",\\\"Jane\\\",\\\"Smith\\\",\\\"HR\\\",\\\"65000\\\",\\\"2019-05-20T00:00:00Z\\\"\\n\\\"3\\\",\\\"Robert\\\",\\\"Johnson\\\",\\\"Sales\\\",\\\"85000\\\",\\\"2021-03-10T00:00:00Z\\\"\\n\\\"4\\\",\\\"Emily\\\",\\\"Davis\\\",\\\"IT\\\",\\\"80000\\\",\\\"2022-07-01T00:00:00Z\\\"\"}' -ContentType \"application/json\" | ConvertTo-Json -Depth 10 > ask_result.json",
+			"isBackground": false
+		},
+		{
+			"label": "TestAskCurl",
+			"type": "shell",
+			"command": "curl.exe -X POST \"http://localhost:5071/api/query/ask\" -H \"Content-Type: application/json\" -d \"{\\\"prompt\\\":\\\"Insert this data into the employees table:\\\\n\\\\nId,FirstName,LastName,Department,Salary,HireDate\\\\n\\\\\\\"1\\\\\\\",\\\\\\\"John\\\\\\\",\\\\\\\"Doe\\\\\\\",\\\\\\\"IT\\\\\\\",\\\\\\\"75000\\\\\\\",\\\\\\\"2020-01-15T00:00:00Z\\\\\\\"\\\"}\" > ask_result2.json",
+			"isBackground": false
+		},
+		{
+			"label": "KillAndBuild",
+			"type": "shell",
+			"command": "taskkill /F /IM Api.exe ; dotnet build backend/NlToSqlAssistant.slnx",
+			"isBackground": false
+		},
+		{
+			"label": "RunBackendFixed",
+			"type": "shell",
+			"command": "dotnet run --project backend/Api/Api.csproj",
+			"isBackground": true
+		},
+		{
+			"label": "BuildAfterCleanUp",
+			"type": "shell",
+			"command": "taskkill /F /IM Api.exe ; dotnet build backend/NlToSqlAssistant.slnx",
+			"isBackground": false
+		},
+		{
+			"label": "RunBackendAfterCleanUp",
+			"type": "shell",
+			"command": "dotnet run --project backend/Api/Api.csproj",
+			"isBackground": true
+		},
+		{
+			"label": "BuildAfterAddingRowsAffected",
+			"type": "shell",
+			"command": "taskkill /F /IM Api.exe ; dotnet build backend/NlToSqlAssistant.slnx",
+			"isBackground": false
+		},
+		{
+			"label": "RunBackendBackground",
+			"type": "shell",
+			"command": "dotnet run --project backend/Api/Api.csproj",
+			"isBackground": true
+		}
+	]
+}

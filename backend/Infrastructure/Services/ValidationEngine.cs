@@ -11,7 +11,6 @@ public class ValidationEngine : IValidationEngine
     private readonly ApplicationDbContext _dbContext;
     private readonly ILogger<ValidationEngine> _logger;
 
-    // A white list of strongly safe operators we allow from the LLM
     private static readonly HashSet<string> AllowedOperators = new(StringComparer.OrdinalIgnoreCase)
     {
         "=", ">", "<", ">=", "<=", "<>", "!=", "LIKE", "ILIKE", "IN", "NOT IN", "IS NULL", "IS NOT NULL"
@@ -27,25 +26,48 @@ public class ValidationEngine : IValidationEngine
     {
         if (ir == null) return (false, "The IR is null.");
         
-        // 1. Check Table
         if (string.IsNullOrWhiteSpace(ir.Table)) return (false, "Target table is empty.");
         
-        // In this constrained assistant, maybe we only allow the "employees" table
-        if (!ir.Table.Equals("employees", StringComparison.OrdinalIgnoreCase))
+        if (ir.Action == "CREATE_TABLE")
         {
-            return (false, $"Querying table '{ir.Table}' is not allowed.");
+            if (ir.TableColumns == null || ir.TableColumns.Count == 0)
+                return (false, "CREATE_TABLE requires at least one column definition.");
+            return (true, string.Empty);
         }
 
-        // Fetch Metadata representation for the explicit Employee entity constraints
         var model = _dbContext.Model;
-        var entityType = model.GetEntityTypes().FirstOrDefault(t => t.GetTableName()?.Equals("employees", StringComparison.OrdinalIgnoreCase) == true);
-        
+        var entityType = model.GetEntityTypes().FirstOrDefault(t => t.GetTableName()?.Equals(ir.Table, StringComparison.OrdinalIgnoreCase) == true);
+
         if (entityType == null)
             return (false, "The target table is not configured within the secure domain contexts.");
 
         var validColumns = entityType.GetProperties().Select(p => p.GetColumnName() ?? p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // 2. Check Select Columns
+        if (ir.Action == "INSERT")
+        {
+            foreach (var col in ir.InsertColumns)
+            {
+                if (!validColumns.Contains(col))
+                {
+                    return (false, $"Disallowed or non-existent column '{col}' in INSERT clause.");
+                }
+            }
+            if (ir.InsertValues == null || ir.InsertValues.Count == 0)
+            {
+                return (false, "No values provided for INSERT.");
+            }
+            return (true, string.Empty);
+        }
+
+        if (ir.Action == "UPDATE")
+        {
+            foreach (var clause in ir.SetClauses)
+            {
+                if (!validColumns.Contains(clause.Column))
+                    return (false, $"Disallowed or non-existent column '{clause.Column}' in UPDATE SET clause.");
+            }
+        }
+
         foreach (var col in ir.SelectColumns)
         {
             if (col != "*" && !validColumns.Contains(col))
@@ -54,7 +76,6 @@ public class ValidationEngine : IValidationEngine
             }
         }
 
-        // 3. Check Where Clauses & Filter operations
         foreach (var clause in ir.WhereClauses)
         {
             if (!validColumns.Contains(clause.Column))
@@ -64,11 +85,8 @@ public class ValidationEngine : IValidationEngine
             {
                  return (false, $"Operator '{clause.Operator}' is not permitted for security reasons.");
             }
-            
-            // Note: Preventing direct raw drops/injects within Value strings will be managed in ISqlBuilder via parameterized queries
         }
 
-        // 4. Check Ordering
         foreach (var order in ir.OrderClauses)
         {
             if (!validColumns.Contains(order.Column))
@@ -79,7 +97,6 @@ public class ValidationEngine : IValidationEngine
                 return (false, "Order direction must be ASC or DESC.");
         }
 
-        // 5. Basic limit check to prevent massive dumps
         if (ir.Limit is <= 0 or > 1000)
         {
             return (false, "Limit must be strictly greater than 0 and less than or equal to 1000.");

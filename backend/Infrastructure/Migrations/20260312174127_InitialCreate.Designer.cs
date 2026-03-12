@@ -12,7 +12,7 @@ using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 namespace Infrastructure.Migrations
 {
     [DbContext(typeof(ApplicationDbContext))]
-    [Migration("20260312164050_InitialCreate")]
+    [Migration("20260312174127_InitialCreate")]
     partial class InitialCreate
     {
         /// <inheritdoc />
@@ -61,7 +61,7 @@ namespace Infrastructure.Migrations
                             Id = 1,
                             Department = "IT",
                             FirstName = "John",
-                            HireDate = new DateTime(2020, 1, 15, 0, 0, 0, 0, DateTimeKind.Unspecified),
+                            HireDate = new DateTime(2020, 1, 15, 0, 0, 0, 0, DateTimeKind.Utc),
                             LastName = "Doe",
                             Salary = 75000m
                         },
@@ -70,7 +70,7 @@ namespace Infrastructure.Migrations
                             Id = 2,
                             Department = "HR",
                             FirstName = "Jane",
-                            HireDate = new DateTime(2019, 5, 20, 0, 0, 0, 0, DateTimeKind.Unspecified),
+                            HireDate = new DateTime(2019, 5, 20, 0, 0, 0, 0, DateTimeKind.Utc),
                             LastName = "Smith",
                             Salary = 65000m
                         },
@@ -79,7 +79,7 @@ namespace Infrastructure.Migrations
                             Id = 3,
                             Department = "Sales",
                             FirstName = "Robert",
-                            HireDate = new DateTime(2021, 3, 10, 0, 0, 0, 0, DateTimeKind.Unspecified),
+                            HireDate = new DateTime(2021, 3, 10, 0, 0, 0, 0, DateTimeKind.Utc),
                             LastName = "Johnson",
                             Salary = 85000m
                         },
@@ -88,7 +88,7 @@ namespace Infrastructure.Migrations
                             Id = 4,
                             Department = "IT",
                             FirstName = "Emily",
-                            HireDate = new DateTime(2022, 7, 1, 0, 0, 0, 0, DateTimeKind.Unspecified),
+                            HireDate = new DateTime(2022, 7, 1, 0, 0, 0, 0, DateTimeKind.Utc),
                             LastName = "Davis",
                             Salary = 80000m
                         });
