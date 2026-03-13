@@ -48,9 +48,22 @@ public class PostgresSqlBuilder : ISqlBuilder
         var parameters = new Dictionary<string, object>();
         var sqlBuilder = new StringBuilder();
 
+        AppendInsertColumns(ir, sqlBuilder);
+        AppendInsertValues(ir, sqlBuilder, parameters);
+        AppendConflictClause(ir, sqlBuilder);
+
+        sqlBuilder.Append(" RETURNING *");
+        return (sqlBuilder.ToString(), parameters);
+    }
+
+    private void AppendInsertColumns(QueryIr ir, StringBuilder sqlBuilder)
+    {
         var columns = string.Join(", ", ir.InsertColumns.Select(c => $"\"{c}\""));
         sqlBuilder.Append($"INSERT INTO \"{ir.Table}\" ({columns}) VALUES ");
+    }
 
+    private void AppendInsertValues(QueryIr ir, StringBuilder sqlBuilder, Dictionary<string, object> parameters)
+    {
         for (int i = 0; i < ir.InsertValues.Count; i++)
         {
             var row = ir.InsertValues[i];
@@ -67,7 +80,10 @@ public class PostgresSqlBuilder : ISqlBuilder
                 sqlBuilder.Append(", ");
             }
         }
+    }
 
+    private void AppendConflictClause(QueryIr ir, StringBuilder sqlBuilder)
+    {
         var conflictColsList = (ir.ConflictColumns != null && ir.ConflictColumns.Count > 0) 
             ? ir.ConflictColumns 
             : new List<string> { "Id" };
@@ -86,12 +102,10 @@ public class PostgresSqlBuilder : ISqlBuilder
         }
         else
         {
+            // Fallback if no specific update columns
             var fallbackClauses = conflictColsList.Select(c => $"\"{c}\" = EXCLUDED.\"{c}\"");
             sqlBuilder.Append(string.Join(", ", fallbackClauses));
         }
-
-        sqlBuilder.Append(" RETURNING *");
-        return (sqlBuilder.ToString(), parameters);
     }
 
     private (string Sql, Dictionary<string, object> Parameters) BuildUpdateSql(QueryIr ir)
@@ -130,10 +144,28 @@ public class PostgresSqlBuilder : ISqlBuilder
         var parameters = new Dictionary<string, object>();
         var sqlBuilder = new StringBuilder();
 
+        int paramCounter = 0;
+        BuildCascadeDeletes(ir, sqlBuilder, parameters, ref paramCounter);
+
         sqlBuilder.Append($"DELETE FROM \"{ir.Table}\"");
-        BuildWhereClause(ir, sqlBuilder, parameters, 0);
+        BuildWhereClause(ir, sqlBuilder, parameters, paramCounter);
         sqlBuilder.Append(" RETURNING *");
         return (sqlBuilder.ToString(), parameters);
+    }
+
+    private void BuildCascadeDeletes(QueryIr ir, StringBuilder sqlBuilder, Dictionary<string, object> parameters, ref int paramCounter)
+    {
+        if (ir.CascadeDeletes != null && ir.CascadeDeletes.Count > 0)
+        {
+            foreach (var cascade in ir.CascadeDeletes)
+            {
+                BuildCascadeDeletes(cascade, sqlBuilder, parameters, ref paramCounter);
+
+                sqlBuilder.Append($"DELETE FROM \"{cascade.Table}\"");
+                paramCounter = BuildWhereClauseInternal(cascade, sqlBuilder, parameters, paramCounter);
+                sqlBuilder.Append(";\n");
+            }
+        }
     }
 
     private (string Sql, Dictionary<string, object> Parameters) BuildSelectSql(QueryIr ir)
@@ -148,12 +180,28 @@ public class PostgresSqlBuilder : ISqlBuilder
     {
         var sqlBuilder = new StringBuilder();
 
+        AppendSelectFields(ir, sqlBuilder);
+        AppendJoins(ir, sqlBuilder);
+        counter = BuildWhereClauseInternal(ir, sqlBuilder, parameters, counter);
+        AppendGroupBy(ir, sqlBuilder);
+        AppendOrderClauses(ir, sqlBuilder);
+        AppendLimit(ir, sqlBuilder);
+        AppendUnions(ir, sqlBuilder, parameters, ref counter);
+
+        return (sqlBuilder.ToString(), parameters);
+    }
+
+    private void AppendSelectFields(QueryIr ir, StringBuilder sqlBuilder)
+    {
         var selectFields = ir.SelectColumns == null || ir.SelectColumns.Count == 0
             ? "*"
-            : string.Join(", ", ir.SelectColumns.Select(c => QuoteIdentifier(c)));
+            : string.Join(", ", ir.SelectColumns.Select(QuoteIdentifier));
 
         sqlBuilder.Append($"SELECT {selectFields} FROM \"{ir.Table}\"");
+    }
 
+    private void AppendJoins(QueryIr ir, StringBuilder sqlBuilder)
+    {
         if (ir.Joins != null && ir.Joins.Count > 0)
         {
             foreach (var join in ir.Joins)
@@ -161,27 +209,37 @@ public class PostgresSqlBuilder : ISqlBuilder
                 sqlBuilder.Append($" {join.Type.ToUpper()} JOIN \"{join.Table}\" ON {join.Condition}");
             }
         }
+    }
 
-        counter = BuildWhereClauseInternal(ir, sqlBuilder, parameters, counter);
-
+    private void AppendGroupBy(QueryIr ir, StringBuilder sqlBuilder)
+    {
         if (ir.GroupBy != null && ir.GroupBy.Count > 0)
         {
             sqlBuilder.Append(" GROUP BY ");
-            sqlBuilder.Append(string.Join(", ", ir.GroupBy.Select(g => QuoteIdentifier(g))));
+            sqlBuilder.Append(string.Join(", ", ir.GroupBy.Select(QuoteIdentifier)));
         }
+    }
 
+    private void AppendOrderClauses(QueryIr ir, StringBuilder sqlBuilder)
+    {
         if (ir.OrderClauses != null && ir.OrderClauses.Count > 0)
         {
             sqlBuilder.Append(" ORDER BY ");
             var orderings = ir.OrderClauses.Select(o => $"{QuoteIdentifier(o.Column)} {o.Direction}");
             sqlBuilder.Append(string.Join(", ", orderings));
         }
+    }
 
+    private void AppendLimit(QueryIr ir, StringBuilder sqlBuilder)
+    {
         if (ir.Limit.HasValue)
         {
             sqlBuilder.Append($" LIMIT {ir.Limit.Value}");
         }
+    }
 
+    private void AppendUnions(QueryIr ir, StringBuilder sqlBuilder, Dictionary<string, object> parameters, ref int counter)
+    {
         if (ir.Unions != null && ir.Unions.Count > 0)
         {
             foreach (var unionIr in ir.Unions)
@@ -190,8 +248,6 @@ public class PostgresSqlBuilder : ISqlBuilder
                 sqlBuilder.Append($" UNION {unionResult.Sql}");
             }
         }
-
-        return (sqlBuilder.ToString(), parameters);
     }
 
     private void BuildWhereClause(QueryIr ir, StringBuilder sqlBuilder, Dictionary<string, object> parameters, int paramOffset)
@@ -208,14 +264,22 @@ public class PostgresSqlBuilder : ISqlBuilder
             for (int i = 0; i < ir.WhereClauses.Count; i++)
             {
                 var clause = ir.WhereClauses[i];
-                var paramName = $"@p{offset++}";
-
+                
                 if (i > 0) sqlBuilder.Append(" AND ");
 
                 var colName = QuoteIdentifier(clause.Column);
-                sqlBuilder.Append($"{colName} {clause.Operator} {paramName}");
 
-                parameters.Add(paramName, GetValue(clause.Value));
+                if (clause.IsExpression)
+                {
+                    var valStr = clause.Value?.ToString() ?? "NULL";
+                    sqlBuilder.Append($"{colName} {clause.Operator} {valStr}");
+                }
+                else
+                {
+                    var paramName = $"@p{offset++}";
+                    sqlBuilder.Append($"{colName} {clause.Operator} {paramName}");
+                    parameters.Add(paramName, GetValue(clause.Value));
+                }
             }
         }
         return offset;

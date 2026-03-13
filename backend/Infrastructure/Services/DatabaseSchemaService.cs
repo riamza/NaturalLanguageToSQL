@@ -14,48 +14,53 @@ public class DatabaseSchemaService : IDatabaseSchemaService
         _dbContext = dbContext;
     }
 
+    private const string SchemaQuery = @"
+        WITH fk_info AS (
+            SELECT
+                kcu.table_name,
+                kcu.column_name,
+                ccu.table_name AS foreign_table_name,
+                ccu.column_name AS foreign_column_name
+            FROM
+                information_schema.table_constraints AS tc
+                JOIN information_schema.key_column_usage AS kcu
+                  ON tc.constraint_name = kcu.constraint_name
+                  AND tc.table_schema = kcu.table_schema
+                JOIN information_schema.constraint_column_usage AS ccu
+                  ON ccu.constraint_name = tc.constraint_name
+                  AND ccu.table_schema = tc.table_schema
+            WHERE tc.constraint_type = 'FOREIGN KEY'
+        )
+        SELECT
+            t.table_name,
+            c.column_name,
+            c.data_type,
+            CASE WHEN tc.constraint_type = 'PRIMARY KEY' THEN true ELSE false END as is_primary,
+            fk.foreign_table_name,
+            fk.foreign_column_name
+        FROM
+            information_schema.tables t
+        JOIN
+            information_schema.columns c ON t.table_name = c.table_name
+        LEFT JOIN information_schema.key_column_usage kcu 
+            ON t.table_name = kcu.table_name AND c.column_name = kcu.column_name
+        LEFT JOIN information_schema.table_constraints tc 
+            ON kcu.constraint_name = tc.constraint_name AND tc.constraint_type = 'PRIMARY KEY'
+        LEFT JOIN fk_info fk
+            ON t.table_name = fk.table_name AND c.column_name = fk.column_name
+        WHERE
+            t.table_schema = 'public'
+            AND t.table_type = 'BASE TABLE'
+            AND t.table_name != '__EFMigrationsHistory'
+        ORDER BY
+            t.table_name, c.ordinal_position;";
+
     public async Task<string> GetDatabaseSchemaDescriptionAsync()
     {
         var schemaBuilder = new StringBuilder();
 
-        var query = @"
-            WITH fk_info AS (
-                SELECT
-                    kcu.table_name,
-                    kcu.column_name,
-                    ccu.table_name AS foreign_table_name,
-                    ccu.column_name AS foreign_column_name
-                FROM
-                    information_schema.table_constraints AS tc
-                    JOIN information_schema.key_column_usage AS kcu
-                      ON tc.constraint_name = kcu.constraint_name
-                      AND tc.table_schema = kcu.table_schema
-                    JOIN information_schema.constraint_column_usage AS ccu
-                      ON ccu.constraint_name = tc.constraint_name
-                      AND ccu.table_schema = tc.table_schema
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-            )
-            SELECT
-                t.table_name,
-                c.column_name,
-                c.data_type,
-                fk.foreign_table_name,
-                fk.foreign_column_name
-            FROM
-                information_schema.tables t
-            JOIN
-                information_schema.columns c ON t.table_name = c.table_name
-            LEFT JOIN fk_info fk
-                ON t.table_name = fk.table_name AND c.column_name = fk.column_name
-            WHERE
-                t.table_schema = 'public'
-                AND t.table_type = 'BASE TABLE'
-                AND t.table_name != '__EFMigrationsHistory'
-            ORDER BY
-                t.table_name, c.ordinal_position;";
-
         using var command = _dbContext.Database.GetDbConnection().CreateCommand();
-        command.CommandText = query;
+        command.CommandText = SchemaQuery;
 
         await _dbContext.Database.OpenConnectionAsync();
 
@@ -68,8 +73,9 @@ public class DatabaseSchemaService : IDatabaseSchemaService
         {
             var tableName = result.GetString(0);
             var columnName = result.GetString(1);
-            var foreignTable = result.IsDBNull(3) ? null : result.GetString(3);
-            var foreignCol = result.IsDBNull(4) ? null : result.GetString(4);
+            // Index 2 is data_type, Index 3 is is_primary
+            var foreignTable = result.IsDBNull(4) ? null : result.GetString(4);
+            var foreignCol = result.IsDBNull(5) ? null : result.GetString(5);
 
             if (currentTable != tableName)
             {
@@ -101,49 +107,8 @@ public class DatabaseSchemaService : IDatabaseSchemaService
     {
         var tables = new List<object>();
 
-        var query = @"
-            WITH fk_info AS (
-                SELECT
-                    kcu.table_name,
-                    kcu.column_name,
-                    ccu.table_name AS foreign_table_name,
-                    ccu.column_name AS foreign_column_name
-                FROM
-                    information_schema.table_constraints AS tc
-                    JOIN information_schema.key_column_usage AS kcu
-                      ON tc.constraint_name = kcu.constraint_name
-                      AND tc.table_schema = kcu.table_schema
-                    JOIN information_schema.constraint_column_usage AS ccu
-                      ON ccu.constraint_name = tc.constraint_name
-                      AND ccu.table_schema = tc.table_schema
-                WHERE tc.constraint_type = 'FOREIGN KEY'
-            )
-            SELECT
-                t.table_name,
-                c.column_name,
-                c.data_type,
-                CASE WHEN tc.constraint_type = 'PRIMARY KEY' THEN true ELSE false END as is_primary,
-                fk.foreign_table_name,
-                fk.foreign_column_name
-            FROM
-                information_schema.tables t
-            JOIN
-                information_schema.columns c ON t.table_name = c.table_name
-            LEFT JOIN information_schema.key_column_usage kcu 
-                ON t.table_name = kcu.table_name AND c.column_name = kcu.column_name
-            LEFT JOIN information_schema.table_constraints tc 
-                ON kcu.constraint_name = tc.constraint_name AND tc.constraint_type = 'PRIMARY KEY'
-            LEFT JOIN fk_info fk
-                ON t.table_name = fk.table_name AND c.column_name = fk.column_name
-            WHERE
-                t.table_schema = 'public'
-                AND t.table_type = 'BASE TABLE'
-                AND t.table_name != '__EFMigrationsHistory'
-            ORDER BY
-                t.table_name, c.ordinal_position;";
-
         using var command = _dbContext.Database.GetDbConnection().CreateCommand();
-        command.CommandText = query;
+        command.CommandText = SchemaQuery;
 
         await _dbContext.Database.OpenConnectionAsync();
         using var result = await command.ExecuteReaderAsync();

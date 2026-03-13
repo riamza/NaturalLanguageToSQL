@@ -15,6 +15,7 @@ public class LlmNaturalLanguageProcessor : INaturalLanguageProcessor
     private readonly string _modelUrl;
     private readonly string _modelName;
     private readonly ILogger<LlmNaturalLanguageProcessor> _logger;
+    private readonly Dictionary<string, string> _prompts = new();
 
     public LlmNaturalLanguageProcessor(
         HttpClient httpClient, 
@@ -34,123 +35,58 @@ public class LlmNaturalLanguageProcessor : INaturalLanguageProcessor
         {
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         }
+
+        LoadPrompts();
+    }
+
+    private void LoadPrompts()
+    {
+        var basePath = AppDomain.CurrentDomain.BaseDirectory;
+        var promptPath = Path.Combine(basePath, "Resources", "system_prompt.txt");
+        if (!File.Exists(promptPath))
+        {
+            var projectRoot = Directory.GetParent(Directory.GetCurrentDirectory())?.FullName ?? "";
+            promptPath = Path.Combine(projectRoot, "Infrastructure", "Resources", "system_prompt.txt");
+        }
+
+        if (File.Exists(promptPath))
+        {
+            var lines = File.ReadAllLines(promptPath);
+            string? currentKey = null;
+            var currentContent = new StringBuilder();
+
+            foreach (var line in lines)
+            {
+                if (line.StartsWith("=== ") && line.EndsWith(" ==="))
+                {
+                    if (currentKey != null)
+                    {
+                        _prompts[currentKey] = currentContent.ToString().Trim();
+                        currentContent.Clear();
+                    }
+                    currentKey = line.Replace("===", "").Trim();
+                }
+                else if (currentKey != null)
+                {
+                    currentContent.AppendLine(line);
+                }
+            }
+            if (currentKey != null)
+            {
+                _prompts[currentKey] = currentContent.ToString().Trim();
+            }
+        }
+        else
+        {
+            _logger.LogWarning($"Could not find system prompt file at {promptPath}. LLM will use empty prompts.");
+        }
     }
 
     public async Task<QueryIr> TranslateToIrAsync(string naturalLanguageQuery)
     {
         var databaseSchemaContext = await _schemaService.GetDatabaseSchemaDescriptionAsync();
-
-        var systemPrompt = @"You are an AI that translates natural language questions into an Intermediate Representation (IR) JSON for querying a PostgreSQL database.
-
-The available database schema is strictly the following:
-" + databaseSchemaContext + @"
-
-RULES:
-1. Output ONLY valid JSON matching exactly this C# class structure.
-2. No markdown formatting, no code blocks, no explanations. Just raw JSON.
-  3. Use exact table names and column names with correct casing from the schema definition provided above. For PostgreSQL, if a column has mixed or uppercase letters, ALWAYS quote it inside functions or complex expressions.
-4. If the user asks to query/read data, use ""Action"": ""SELECT"". SelectColumns should be specific unless the user asks for 'all' (use ['*']).
-5. ALWAYS defaults to ""UPSERT"" instead of ""INSERT"" when inserting or adding data. You MUST specify ""ConflictColumns"" (usually the primary key like ""Id"") to handle duplicates. If the user asks to update specific rows, use ""Action"": ""UPDATE"" and use ""SetClauses"" to specify the columns to change and ""WhereClauses"" to target the rows. If the user asks to delete rows, use ""Action"": ""DELETE"" and use ""WhereClauses"".
-6. If the user asks to create a table, use ""Action"": ""CREATE_TABLE"". Define ""TableColumns"" containing objects with ""Name"" (string), ""DataType"" (string like SERIAL, INTEGER, VARCHAR(255), TIMESTAMP), ""IsPrimaryKey"" (boolean), and ""IsNullable"" (boolean). If a column is a foreign key, also define ""ReferencesTable"" (string) and ""ReferencesColumn"" (string).
-7. If the user asks to insert data (like from a CSV) for a table that DOES NOT EXIST in the schema, use ""Action"": ""CREATE_TABLE"" to generate the necessary table schema FIRST. Do NOT use ""Action"": ""ERROR"" in this case. Give the new table an appropriate name and infer the columns from the data provided.
-  8. If the query requires aggregations (MIN, MAX, AVG, SUM, COUNT), put them directly in ""SelectColumns"" (e.g., ""COUNT(*) AS Total""). Use ""GroupBy"" for grouping columns. CRITICAL FOR POSTGRESQL: If you use column names inside functions or expressions, you MUST wrap the column names in double quotes and preserve case (e.g., ""AVG(\""Salary\"") AS AverageSalary"").
-  9. If the query requires fetching data from multiple tables, use ""Joins"" arrays. Specify ""Type"" (INNER, LEFT), ""Table"", and ""Condition"" (e.g. ""a.id = b.a_id""). You can prefix columns with table names. CRITICAL FOR POSTGRESQL: You MUST wrap both the table name and the column name in double quotes inside the ""Condition"" to preserve casing (e.g. ""\""employees\"".\""DepartmentId\"" = \""departments\"".\""Id\"""").
-10. If the query requires combining results (UNION), use the ""Unions"" array with additional JSON IR structures for the queries to unite.
-11. If the user query is completely non-sensical, random text, impossible to understand, or cannot be resolved to valid SQL interactions at all, use ""Action"": ""ERROR"" and populate ""ErrorDetails"" with a message in Romanian explaining the issue.
-12. MUST RETURN EXACTLY ONE JSON OBJECT. Do NOT return an array of objects.
-13. If doing UPDATE queries with computational expressions like changing a numeric column by a mathematical formula (e.g., increasing with 5%), add ""IsExpression"": true to the SetClause and write the mathematical formula exactly as it translates to SQL inside ""Value"" (e.g. { ""Column"": ""Salary"", ""Value"": ""\""Salary\"" * 1.05"", ""IsExpression"": true }).
-
-JSON Structure Example (COMPLEX SELECT WITH JOINS & GROUP BY):
-{
-  ""Action"": ""SELECT"",
-  ""Table"": ""employees"",
-  ""SelectColumns"": [""departments.Name"", ""COUNT(employees.Id) AS EmpCount""],
-  ""Joins"": [
-    { ""Type"": ""INNER"", ""Table"": ""departments"", ""Condition"": ""employees.DepartmentId = departments.Id"" }
-  ],
-  ""GroupBy"": [""departments.Name""],
-  ""OrderClauses"": [
-    { ""Column"": ""EmpCount"", ""Direction"": ""DESC"" }
-  ]
-}
-
-JSON Structure Example (CREATE_TABLE):
-{
-  ""Action"": ""CREATE_TABLE"",
-  ""Table"": ""new_table_name"",
-  ""TableColumns"": [
-    { ""Name"": ""id"", ""DataType"": ""SERIAL"", ""IsPrimaryKey"": true, ""IsNullable"": false },
-    { ""Name"": ""name"", ""DataType"": ""VARCHAR(100)"", ""IsPrimaryKey"": false, ""IsNullable"": false },
-    { ""Name"": ""user_id"", ""DataType"": ""INTEGER"", ""IsPrimaryKey"": false, ""IsNullable"": true, ""ReferencesTable"": ""users"", ""ReferencesColumn"": ""id"" }
-  ]
-}
-
-JSON Structure Example (ERROR):
-{
-  ""Action"": ""ERROR"",
-  ""ErrorDetails"": ""Nu pot genera un query din textul introdus, deoarece pare a fi un text aleator sau nu se refera la datele disponibile.""
-}
-
-JSON Structure Example (SELECT):
-{
-  ""Action"": ""SELECT"",
-  ""Table"": ""employees"",
-  ""SelectColumns"": [""FirstName"", ""Salary""],
-  ""WhereClauses"": [
-    {
-      ""Column"": ""Department"",
-      ""Operator"": ""="",
-      ""Value"": ""IT""
-    }
-  ],
-  ""OrderClauses"": [
-    {
-      ""Column"": ""Salary"",
-      ""Direction"": ""DESC""
-    }
-  ],
-  ""Limit"": 10
-}
-
-JSON Structure Example (UPDATE):
-{
-  ""Action"": ""UPDATE"",
-  ""Table"": ""employees"",
-  ""SetClauses"": [
-    { ""Column"": ""Salary"", ""Value"": 75000 }
-  ],
-  ""WhereClauses"": [
-    {
-      ""Column"": ""FirstName"",
-      ""Operator"": ""="",
-      ""Value"": ""John""
-    }
-  ]
-}
-
-JSON Structure Example (DELETE):
-{
-  ""Action"": ""DELETE"",
-  ""Table"": ""employees"",
-  ""WhereClauses"": [
-    {
-      ""Column"": ""Department"",
-      ""Operator"": ""="",
-      ""Value"": ""HR""
-    }
-  ]
-}
-
-JSON Structure Example (UPSERT):
-{
-  ""Action"": ""UPSERT"",
-  ""Table"": ""employees"",
-  ""InsertColumns"": [""Id"", ""FirstName"", ""LastName"", ""Department"", ""Salary"", ""HireDate""],
-  ""InsertValues"": [
-    [1, ""John"", ""Doe"", ""IT"", 65000, ""2021-05-10""]
-  ],
-  ""ConflictColumns"": [""Id""]
-}";
+        var systemPromptTemplate = _prompts.GetValueOrDefault("TRANSLATE_SYSTEM_PROMPT", "");
+        var systemPrompt = systemPromptTemplate.Replace("{{SCHEMA}}", databaseSchemaContext);
 
         var payload = new
         {
@@ -176,7 +112,13 @@ JSON Structure Example (UPSERT):
         }
 
         var responseString = await response.Content.ReadAsStringAsync();
+        return ParseLlmResponse(responseString);
+    }
 
+
+
+    private QueryIr ParseLlmResponse(string responseString)
+    {
         try 
         {
             using var jsonDocument = JsonDocument.Parse(responseString);
@@ -196,14 +138,12 @@ JSON Structure Example (UPSERT):
                 PropertyNameCaseInsensitive = true
             };
 
-            // Detect if the LLM returned an array of objects
             if (resultJson != null && resultJson.TrimStart().StartsWith("["))
             {
                 var irList = JsonSerializer.Deserialize<List<QueryIr>>(resultJson, serializeOptions);
                 return irList?.FirstOrDefault() ?? new QueryIr();
             }
             
-            // Or if it returned multiple objects not in an array, try to just wrap it in an array
             if (resultJson != null && resultJson.TrimEnd().EndsWith("}") && (resultJson.Contains("}\n{") || resultJson.Contains("}{")))
             {
                 var fixedJson = "[" + resultJson.Replace("}\n{", "},{").Replace("}{", "},{") + "]";
@@ -223,15 +163,11 @@ JSON Structure Example (UPSERT):
 
     public async Task<string> GetErrorSuggestionAsync(string errorMessage, string userQuery, string schemaContext)
     {
-        var systemPrompt = $@"You are a helpful database assistant analyzing a SQL error.
-The user provided a request, and it resulted in a database error.
-Here is the database schema for reference:
-{schemaContext}
+        var sysTemplate = _prompts.GetValueOrDefault("ERROR_SUGGESTION_SYSTEM_PROMPT", "");
+        var systemPrompt = sysTemplate.Replace("{{SCHEMA}}", schemaContext);
 
-Your job is to read the error along with the schema and provide a short, friendly, and actionable suggestion in Romanian on how the user could fix their query or input data.
-Do not output technical jargon if possible. Keep it under 2-3 sentences. Do not use markdown format.";
-
-        var userPrompt = $"User input: {userQuery}\nDatabase Error: {errorMessage}\n\nPlease provide a short suggestion in Romanian.";
+        var userTemplate = _prompts.GetValueOrDefault("ERROR_SUGGESTION_USER_PROMPT", "");
+        var userPrompt = userTemplate.Replace("{{USER_QUERY}}", userQuery).Replace("{{ERROR_MESSAGE}}", errorMessage);
 
         var requestBody = new
         {
