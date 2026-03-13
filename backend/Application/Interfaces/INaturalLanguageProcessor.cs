@@ -14,5 +14,5 @@ public interface INaturalLanguageProcessor
     /// <summary>
     /// Generates a human-friendly suggestion for resolving a SQL execution error.
     /// </summary>
-    Task<string> GetErrorSuggestionAsync(string errorMessage, string userQuery);
+    Task<string> GetErrorSuggestionAsync(string errorMessage, string userQuery, string schemaContext);
 }

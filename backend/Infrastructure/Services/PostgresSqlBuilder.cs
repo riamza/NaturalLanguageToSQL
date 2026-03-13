@@ -100,19 +100,27 @@ public class PostgresSqlBuilder : ISqlBuilder
         var sqlBuilder = new StringBuilder();
 
         sqlBuilder.Append($"UPDATE \"{ir.Table}\" SET ");
-        
+
         var setList = new List<string>();
         for (int i = 0; i < ir.SetClauses.Count; i++)
         {
             var clause = ir.SetClauses[i];
-            var paramName = $"@s{i}";
-            setList.Add($"\"{clause.Column}\" = {paramName}");
-            parameters.Add(paramName, GetValue(clause.Value));
+            if (clause.IsExpression)
+            {
+                var valStr = GetValue(clause.Value)?.ToString() ?? "NULL";
+                setList.Add($"\"{clause.Column}\" = {valStr}");
+            }
+            else
+            {
+                var paramName = $"@s{i}";
+                setList.Add($"\"{clause.Column}\" = {paramName}");
+                parameters.Add(paramName, GetValue(clause.Value));
+            }
         }
         sqlBuilder.Append(string.Join(", ", setList));
 
         BuildWhereClause(ir, sqlBuilder, parameters, ir.SetClauses.Count);
-        
+
         sqlBuilder.Append(" RETURNING *");
         return (sqlBuilder.ToString(), parameters);
     }
@@ -131,20 +139,41 @@ public class PostgresSqlBuilder : ISqlBuilder
     private (string Sql, Dictionary<string, object> Parameters) BuildSelectSql(QueryIr ir)
     {
         var parameters = new Dictionary<string, object>();
+        return BuildSelectSqlInternal(ir, parameters, ref paramCounter);
+    }
+
+    private int paramCounter = 0;
+
+    private (string Sql, Dictionary<string, object> Parameters) BuildSelectSqlInternal(QueryIr ir, Dictionary<string, object> parameters, ref int counter)
+    {
         var sqlBuilder = new StringBuilder();
 
         var selectFields = ir.SelectColumns == null || ir.SelectColumns.Count == 0
             ? "*"
-            : string.Join(", ", ir.SelectColumns.Select(c => c == "*" ? "*" : $"\"{c}\""));
+            : string.Join(", ", ir.SelectColumns.Select(c => QuoteIdentifier(c)));
 
         sqlBuilder.Append($"SELECT {selectFields} FROM \"{ir.Table}\"");
 
-        BuildWhereClause(ir, sqlBuilder, parameters, 0);
+        if (ir.Joins != null && ir.Joins.Count > 0)
+        {
+            foreach (var join in ir.Joins)
+            {
+                sqlBuilder.Append($" {join.Type.ToUpper()} JOIN \"{join.Table}\" ON {join.Condition}");
+            }
+        }
+
+        counter = BuildWhereClauseInternal(ir, sqlBuilder, parameters, counter);
+
+        if (ir.GroupBy != null && ir.GroupBy.Count > 0)
+        {
+            sqlBuilder.Append(" GROUP BY ");
+            sqlBuilder.Append(string.Join(", ", ir.GroupBy.Select(g => QuoteIdentifier(g))));
+        }
 
         if (ir.OrderClauses != null && ir.OrderClauses.Count > 0)
         {
             sqlBuilder.Append(" ORDER BY ");
-            var orderings = ir.OrderClauses.Select(o => $"\"{o.Column}\" {o.Direction}");
+            var orderings = ir.OrderClauses.Select(o => $"{QuoteIdentifier(o.Column)} {o.Direction}");
             sqlBuilder.Append(string.Join(", ", orderings));
         }
 
@@ -153,26 +182,67 @@ public class PostgresSqlBuilder : ISqlBuilder
             sqlBuilder.Append($" LIMIT {ir.Limit.Value}");
         }
 
+        if (ir.Unions != null && ir.Unions.Count > 0)
+        {
+            foreach (var unionIr in ir.Unions)
+            {
+                var unionResult = BuildSelectSqlInternal(unionIr, parameters, ref counter);
+                sqlBuilder.Append($" UNION {unionResult.Sql}");
+            }
+        }
+
         return (sqlBuilder.ToString(), parameters);
     }
 
     private void BuildWhereClause(QueryIr ir, StringBuilder sqlBuilder, Dictionary<string, object> parameters, int paramOffset)
     {
+        BuildWhereClauseInternal(ir, sqlBuilder, parameters, paramOffset);
+    }
+
+    private int BuildWhereClauseInternal(QueryIr ir, StringBuilder sqlBuilder, Dictionary<string, object> parameters, int paramOffset)
+    {
+        int offset = paramOffset;
         if (ir.WhereClauses != null && ir.WhereClauses.Count > 0)
         {
             sqlBuilder.Append(" WHERE ");
             for (int i = 0; i < ir.WhereClauses.Count; i++)
             {
                 var clause = ir.WhereClauses[i];
-                var paramName = $"@p{i + paramOffset}";
+                var paramName = $"@p{offset++}";
 
                 if (i > 0) sqlBuilder.Append(" AND ");
 
-                sqlBuilder.Append($"\"{clause.Column}\" {clause.Operator} {paramName}");
+                var colName = QuoteIdentifier(clause.Column);
+                sqlBuilder.Append($"{colName} {clause.Operator} {paramName}");
 
                 parameters.Add(paramName, GetValue(clause.Value));
             }
         }
+        return offset;
+    }
+
+    private string QuoteIdentifier(string identifier)
+    {
+        if (string.IsNullOrWhiteSpace(identifier) || identifier == "*") return identifier;
+
+        if (identifier.Contains(" AS ", StringComparison.OrdinalIgnoreCase))
+        {
+            var idx = identifier.IndexOf(" AS ", StringComparison.OrdinalIgnoreCase);
+            var expr = identifier.Substring(0, idx);
+            var alias = identifier.Substring(idx + 4).Trim().Trim('"');
+            return $"{expr} AS \"{alias}\"";
+        }
+
+        if (identifier.Contains("(")) return identifier;
+
+        if (identifier.Contains("."))
+        {
+            var parts = identifier.Split('.');
+            var quotedParts = parts.Select(p => p == "*" ? p : $"\"{p.Trim('"')}\"");
+            return string.Join(".", quotedParts);
+        }
+        
+        return $"\"{identifier.Trim('"')}\"";
     }
 
     private object GetValue(object rawValue)

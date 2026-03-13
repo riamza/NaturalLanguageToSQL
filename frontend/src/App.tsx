@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import { Toaster, toast } from "sonner";
+import { Routes, Route, useNavigate, useLocation } from "react-router-dom";
 import "./App.css";
 
 import { Sidebar } from "./components/Sidebar";
-import type { ViewState } from "./components/Sidebar";
 import { ErrorDisplay } from "./components/ErrorDisplay";
 import { PendingApprovalPanel } from "./components/PendingApprovalPanel";
 import { SqlPanel } from "./components/SqlPanel";
@@ -13,13 +13,14 @@ import { SearchForm } from "./components/SearchForm";
 import { Header } from "./components/Header";
 
 import { HistoryPage } from "./components/HistoryPage";
-import { SchemaViewerPage } from "./components/SchemaViewerPage";
+import { SchemaViewerPage } from "./components/SchemaViewerPage.tsx";
 import { MetricsPage } from "./components/MetricsPage";
 
 import type { QueryResponse, QueryHistoryItem } from "./types";
 
 function App() {
-  const [currentView, setCurrentView] = useState<ViewState>("query");
+  const navigate = useNavigate();
+  const location = useLocation();
   const [prompt, setPrompt] = useState("");
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState<any[]>([]);
@@ -41,7 +42,7 @@ function App() {
   const fetchHistory = async () => {
     try {
       const response = await axios.get<QueryHistoryItem[]>(
-        `${backendUrl}/api/query/history`,
+        `${backendUrl}/api/history`,
       );
       setHistory(response.data);
     } catch (err) {
@@ -90,7 +91,20 @@ function App() {
 
       await fetchHistory();
     } catch (err: any) {
-      setError(err.response?.data || err.message || "An error occurred.");
+      let errorMsg = "An error occurred.";
+      if (err.response?.data) {
+        if (typeof err.response.data === "string") {
+          errorMsg = err.response.data;
+        } else if (typeof err.response.data === "object") {
+          errorMsg =
+            err.response.data.message ||
+            err.response.data.title ||
+            JSON.stringify(err.response.data);
+        }
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      setError(errorMsg);
       await fetchHistory();
     } finally {
       setLoading(false);
@@ -121,11 +135,20 @@ function App() {
 
       await fetchHistory();
     } catch (err: any) {
-      setError(
-        err.response?.data ||
-          err.message ||
-          "An error occurred during execution.",
-      );
+      let errorMsg = "An error occurred during execution.";
+      if (err.response?.data) {
+        if (typeof err.response.data === "string") {
+          errorMsg = err.response.data;
+        } else if (typeof err.response.data === "object") {
+          errorMsg =
+            err.response.data.message ||
+            err.response.data.title ||
+            JSON.stringify(err.response.data);
+        }
+      } else if (err.message) {
+        errorMsg = err.message;
+      }
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
@@ -135,7 +158,7 @@ function App() {
     if (!currentHistoryId) return;
     setFeedback(vote);
     try {
-      await axios.put(`${backendUrl}/api/query/${currentHistoryId}/feedback`, {
+      await axios.put(`${backendUrl}/api/history/${currentHistoryId}/feedback`, {
         feedback: vote,
       });
       await fetchHistory();
@@ -181,7 +204,7 @@ function App() {
       const csvText = event.target?.result as string;
       if (!csvText) return;
 
-      const promptText = `Insert this data into the employees table:\n\n${csvText}`;
+      const promptText = `Insert this data into the correct table based on these columns:\n\n${csvText}`;
       setPrompt(promptText);
       await handleSearch(undefined, promptText);
     };
@@ -189,77 +212,105 @@ function App() {
     reader.readAsText(file);
   };
 
+  // Make sure to refetch history when going to metrics
+  useEffect(() => {
+    if (location.pathname === "/metrics" || location.pathname === "/history") {
+      fetchHistory();
+    }
+  }, [location.pathname]);
+
   return (
     <div className="app-layout">
       <Toaster position="bottom-right" richColors />
-      <Sidebar
-        currentView={currentView}
-        onViewChange={setCurrentView}
+      <Sidebar 
+        history={history}
+        onHistoryClick={(p) => {
+          setPrompt(p);
+          navigate("/");
+          handleSearch(undefined, p);
+        }}
       />
 
       <main className="main-content">
         <div className="container">
-          {currentView === "query" && (
-            <>
-              <Header />
+          <Routes>
+            <Route
+              path="/"
+              element={
+                <>
+                  <Header />
 
-              <SearchForm
-                prompt={prompt}
-                setPrompt={setPrompt}
-                loading={loading}
-                onSearch={handleSearch}
-                onFileUpload={handleFileUpload}
-              />
+                  <SearchForm
+                    prompt={prompt}
+                    setPrompt={setPrompt}
+                    loading={loading}
+                    onSearch={handleSearch}
+                    onFileUpload={handleFileUpload}
+                  />
 
-              <ErrorDisplay
-                error={error}
-                prompt={prompt}
-                loading={loading}
-                onRetry={(p) => handleSearch(undefined, p)}
-              />
+                  <ErrorDisplay
+                    error={error}
+                    prompt={prompt}
+                    loading={loading}
+                    onRetry={(p) => handleSearch(undefined, p)}
+                  />
 
-              <PendingApprovalPanel
-                pendingApproval={pendingApproval}
-                loading={loading}
-                onApprove={handleApprove}
-                onCancel={() => setPendingApproval(null)}
-              />
+                  <PendingApprovalPanel
+                    pendingApproval={pendingApproval}
+                    loading={loading}
+                    onApprove={handleApprove}
+                    onCancel={() => setPendingApproval(null)}
+                  />
 
-              {!pendingApproval && (
-                <SqlPanel sql={generatedSql} executionTime={executionTime} />
-              )}
+                  {!pendingApproval && (
+                    <SqlPanel
+                      sql={generatedSql}
+                      executionTime={executionTime}
+                    />
+                  )}
 
-              <ResultsTable
-                results={results}
-                feedback={feedback}
-                onFeedback={handleFeedback}
-                onExport={exportCSV}
-              />
+                  <ResultsTable
+                    results={results}
+                    feedback={feedback}
+                    onFeedback={handleFeedback}
+                    onExport={exportCSV}
+                  />
 
-              {!loading && results.length === 0 && generatedSql && !error && (
-                <div className="no-results">
-                  {rowsAffected !== null 
-                    ? `${rowsAffected} rânduri au fost afectate.` 
-                    : "No results found for your query."}
-                </div>
-              )}
-            </>
-          )}
-
-          {currentView === "history" && (
-            <HistoryPage
-              history={history}
-              onHistoryClick={(p) => {
-                setPrompt(p);
-                setCurrentView("query");
-                handleSearch(undefined, p);
-              }}
+                  {!loading &&
+                    results.length === 0 &&
+                    generatedSql &&
+                    !error && (
+                      <div className="no-results">
+                        {rowsAffected !== null
+                          ? `${rowsAffected} rânduri au fost afectate.`
+                          : "No results found for your query."}
+                      </div>
+                    )}
+                </>
+              }
             />
-          )}
 
-          {currentView === "schema" && <SchemaViewerPage />}
+            <Route
+              path="/history"
+              element={
+                <HistoryPage
+                  history={history}
+                  onHistoryClick={(p) => {
+                    setPrompt(p);
+                    navigate("/");
+                    handleSearch(undefined, p);
+                  }}
+                />
+              }
+            />
 
-          {currentView === "metrics" && <MetricsPage history={history} />}
+            <Route path="/schema" element={<SchemaViewerPage />} />
+
+            <Route
+              path="/metrics"
+              element={<MetricsPage history={history} />}
+            />
+          </Routes>
         </div>
       </main>
     </div>

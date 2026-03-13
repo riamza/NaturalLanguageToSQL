@@ -35,15 +35,34 @@ public class ValidationEngine : IValidationEngine
             return (true, string.Empty);
         }
 
-        var model = _dbContext.Model;
-        var entityType = model.GetEntityTypes().FirstOrDefault(t => t.GetTableName()?.Equals(ir.Table, StringComparison.OrdinalIgnoreCase) == true);
+        var validColumns = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool tableExists = false;
 
-        if (entityType == null)
+        using (var command = _dbContext.Database.GetDbConnection().CreateCommand())
+        {
+            command.CommandText = "SELECT column_name FROM information_schema.columns WHERE table_name = @tableName;";
+            var param = command.CreateParameter();
+            param.ParameterName = "@tableName";
+            param.Value = ir.Table.ToLower();
+            command.Parameters.Add(param);
+
+            if (command.Connection.State != System.Data.ConnectionState.Open)
+                await command.Connection.OpenAsync();
+
+            using (var reader = await command.ExecuteReaderAsync())
+            {
+                while (await reader.ReadAsync())
+                {
+                    tableExists = true;
+                    validColumns.Add(reader.GetString(0));
+                }
+            }
+        }
+
+        if (!tableExists)
             return (false, "The target table is not configured within the secure domain contexts.");
 
-        var validColumns = entityType.GetProperties().Select(p => p.GetColumnName() ?? p.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        if (ir.Action == "INSERT")
+        if (ir.Action == "INSERT" || ir.Action == "UPSERT")
         {
             foreach (var col in ir.InsertColumns)
             {
@@ -70,7 +89,12 @@ public class ValidationEngine : IValidationEngine
 
         foreach (var col in ir.SelectColumns)
         {
-            if (col != "*" && !validColumns.Contains(col))
+            if (col == "*") continue;
+            
+            // If it has aggregates or prefixes (JOINS), allow it
+            if (col.Contains("(") || col.Contains(" AS ") || col.Contains(".")) continue;
+
+            if (!validColumns.Contains(col))
             {
                 return (false, $"Disallowed or non-existent column '{col}' in SELECT clause.");
             }
@@ -78,7 +102,10 @@ public class ValidationEngine : IValidationEngine
 
         foreach (var clause in ir.WhereClauses)
         {
+            if (clause.Column.Contains(".")) continue; // Allow foreign table where clause filtering if joined.
+
             if (!validColumns.Contains(clause.Column))
+
                 return (false, $"Disallowed or non-existent column '{clause.Column}' in WHERE clause.");
 
             if (!AllowedOperators.Contains(clause.Operator))
@@ -89,9 +116,11 @@ public class ValidationEngine : IValidationEngine
 
         foreach (var order in ir.OrderClauses)
         {
-            if (!validColumns.Contains(order.Column))
+            if (!validColumns.Contains(order.Column) && !ir.SelectColumns.Any(sc => sc.Contains($" AS \"{order.Column}\"") || sc.Contains($" AS {order.Column}")) && !order.Column.Contains("."))
+            {
                 return (false, $"Disallowed or non-existent column '{order.Column}' in ORDER BY clause.");
-            
+            }
+
             var upperDir = order.Direction?.ToUpper();
             if (upperDir != "ASC" && upperDir != "DESC")
                 return (false, "Order direction must be ASC or DESC.");

@@ -1,19 +1,30 @@
-import { LayoutDashboard, Database, Activity, History as HistoryIcon } from 'lucide-react';
-
-export type ViewState = 'query' | 'schema' | 'metrics' | 'history';
+import {
+  LayoutDashboard,
+  Database,
+  Activity,
+  History as HistoryIcon,
+  MessageSquare
+} from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom";
+import type { QueryHistoryItem } from "../types";
 
 interface SidebarProps {
-  currentView: ViewState;
-  onViewChange: (view: ViewState) => void;
+  history?: QueryHistoryItem[];
+  onHistoryClick?: (prompt: string) => void;
 }
 
-export function Sidebar({ currentView, onViewChange }: SidebarProps) {
+export function Sidebar({ history = [], onHistoryClick }: SidebarProps) {
+  const location = useLocation();
+  const navigate = useNavigate();
+
   const navItems = [
-    { id: 'query', label: 'Query Assistant', icon: LayoutDashboard },
-    { id: 'schema', label: 'Schema Viewer', icon: Database },
-    { id: 'metrics', label: 'Metrics & Evals', icon: Activity },
-    { id: 'history', label: 'Query History', icon: HistoryIcon },
+    { path: "/", label: "Query Assistant", icon: LayoutDashboard },
+    { path: "/schema", label: "Schema Viewer", icon: Database },
+    { path: "/metrics", label: "Metrics & Evals", icon: Activity },
+    { path: "/history", label: "Query History", icon: HistoryIcon },
   ] as const;
+
+  const recentHistory = history.slice(0, 5);
 
   return (
     <aside className="sidebar premium-sidebar">
@@ -27,17 +38,39 @@ export function Sidebar({ currentView, onViewChange }: SidebarProps) {
       <nav className="sidebar-nav">
         {navItems.map((item) => (
           <button
-            key={item.id}
-            className={`nav-item ${currentView === item.id ? 'active' : ''}`}
-            onClick={() => onViewChange(item.id as ViewState)}
+            key={item.path}
+            className={`nav-item ${location.pathname === item.path ? "active" : ""}`}
+            onClick={() => navigate(item.path)}
           >
             <item.icon size={18} className="nav-icon" />
             <span className="nav-label">{item.label}</span>
           </button>
         ))}
       </nav>
-      
+
       <div className="sidebar-footer">
+        {recentHistory.length > 0 && (
+          <div className="recent-history-sidebar">
+            <h3 className="recent-history-title">Recent Queries</h3>
+            <div className="recent-history-list">
+              {recentHistory.map((item) => (
+                <button
+                  key={item.id}
+                  className="recent-history-item"
+                  onClick={() => {
+                    if (onHistoryClick) {
+                      onHistoryClick(item.prompt);
+                    }
+                  }}
+                  title={item.prompt}
+                >
+                  <MessageSquare size={14} className="recent-history-icon" />
+                  <span className="recent-history-text">{item.prompt}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
         <div className="status-indicator">
           <span className="status-dot"></span>
           <span>System Online</span>

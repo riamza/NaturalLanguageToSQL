@@ -48,12 +48,33 @@ The available database schema is strictly the following:
 RULES:
 1. Output ONLY valid JSON matching exactly this C# class structure.
 2. No markdown formatting, no code blocks, no explanations. Just raw JSON.
-3. Use exact table names and column names with correct casing from the schema definition provided above.
+  3. Use exact table names and column names with correct casing from the schema definition provided above. For PostgreSQL, if a column has mixed or uppercase letters, ALWAYS quote it inside functions or complex expressions.
 4. If the user asks to query/read data, use ""Action"": ""SELECT"". SelectColumns should be specific unless the user asks for 'all' (use ['*']).
 5. ALWAYS defaults to ""UPSERT"" instead of ""INSERT"" when inserting or adding data. You MUST specify ""ConflictColumns"" (usually the primary key like ""Id"") to handle duplicates. If the user asks to update specific rows, use ""Action"": ""UPDATE"" and use ""SetClauses"" to specify the columns to change and ""WhereClauses"" to target the rows. If the user asks to delete rows, use ""Action"": ""DELETE"" and use ""WhereClauses"".
 6. If the user asks to create a table, use ""Action"": ""CREATE_TABLE"". Define ""TableColumns"" containing objects with ""Name"" (string), ""DataType"" (string like SERIAL, INTEGER, VARCHAR(255), TIMESTAMP), ""IsPrimaryKey"" (boolean), and ""IsNullable"" (boolean). If a column is a foreign key, also define ""ReferencesTable"" (string) and ""ReferencesColumn"" (string).
-7. If the user query is non-sensical, random text, impossible to understand, or cannot be resolved to the DB schema, use ""Action"": ""ERROR"" and populate ""ErrorDetails"" with a message in Romanian explaining the issue.
-  8. MUST RETURN EXACTLY ONE JSON OBJECT. Do NOT return an array of objects. If the user requests multiple actions (e.g. creating two tables), process ONLY the first one and ignore the second.
+7. If the user asks to insert data (like from a CSV) for a table that DOES NOT EXIST in the schema, use ""Action"": ""CREATE_TABLE"" to generate the necessary table schema FIRST. Do NOT use ""Action"": ""ERROR"" in this case. Give the new table an appropriate name and infer the columns from the data provided.
+  8. If the query requires aggregations (MIN, MAX, AVG, SUM, COUNT), put them directly in ""SelectColumns"" (e.g., ""COUNT(*) AS Total""). Use ""GroupBy"" for grouping columns. CRITICAL FOR POSTGRESQL: If you use column names inside functions or expressions, you MUST wrap the column names in double quotes and preserve case (e.g., ""AVG(\""Salary\"") AS AverageSalary"").
+  9. If the query requires fetching data from multiple tables, use ""Joins"" arrays. Specify ""Type"" (INNER, LEFT), ""Table"", and ""Condition"" (e.g. ""a.id = b.a_id""). You can prefix columns with table names. CRITICAL FOR POSTGRESQL: You MUST wrap both the table name and the column name in double quotes inside the ""Condition"" to preserve casing (e.g. ""\""employees\"".\""DepartmentId\"" = \""departments\"".\""Id\"""").
+10. If the query requires combining results (UNION), use the ""Unions"" array with additional JSON IR structures for the queries to unite.
+11. If the user query is completely non-sensical, random text, impossible to understand, or cannot be resolved to valid SQL interactions at all, use ""Action"": ""ERROR"" and populate ""ErrorDetails"" with a message in Romanian explaining the issue.
+12. MUST RETURN EXACTLY ONE JSON OBJECT. Do NOT return an array of objects.
+13. If doing UPDATE queries with computational expressions like changing a numeric column by a mathematical formula (e.g., increasing with 5%), add ""IsExpression"": true to the SetClause and write the mathematical formula exactly as it translates to SQL inside ""Value"" (e.g. { ""Column"": ""Salary"", ""Value"": ""\""Salary\"" * 1.05"", ""IsExpression"": true }).
+
+JSON Structure Example (COMPLEX SELECT WITH JOINS & GROUP BY):
+{
+  ""Action"": ""SELECT"",
+  ""Table"": ""employees"",
+  ""SelectColumns"": [""departments.Name"", ""COUNT(employees.Id) AS EmpCount""],
+  ""Joins"": [
+    { ""Type"": ""INNER"", ""Table"": ""departments"", ""Condition"": ""employees.DepartmentId = departments.Id"" }
+  ],
+  ""GroupBy"": [""departments.Name""],
+  ""OrderClauses"": [
+    { ""Column"": ""EmpCount"", ""Direction"": ""DESC"" }
+  ]
+}
+
+JSON Structure Example (CREATE_TABLE):
 {
   ""Action"": ""CREATE_TABLE"",
   ""Table"": ""new_table_name"",
@@ -151,7 +172,7 @@ JSON Structure Example (UPSERT):
         {
             var error = await response.Content.ReadAsStringAsync();
             _logger.LogError("LLM API failed with status code {StatusCode}. Exception: {Error}", response.StatusCode, error);
-            throw new Exception("Failed to translate natural language to IR due to an LLM error.");
+            throw new Exception($"Failed to translate natural language to IR due to an LLM error: {error}");
         }
 
         var responseString = await response.Content.ReadAsStringAsync();
@@ -200,11 +221,14 @@ JSON Structure Example (UPSERT):
         }
     }
 
-    public async Task<string> GetErrorSuggestionAsync(string errorMessage, string userQuery)
+    public async Task<string> GetErrorSuggestionAsync(string errorMessage, string userQuery, string schemaContext)
     {
-        var systemPrompt = @"You are a helpful database assistant analyzing a SQL error.
+        var systemPrompt = $@"You are a helpful database assistant analyzing a SQL error.
 The user provided a request, and it resulted in a database error.
-Your job is to read the error and provide a short, friendly, and actionable suggestion in Romanian on how the user could fix their query or input data.
+Here is the database schema for reference:
+{schemaContext}
+
+Your job is to read the error along with the schema and provide a short, friendly, and actionable suggestion in Romanian on how the user could fix their query or input data.
 Do not output technical jargon if possible. Keep it under 2-3 sentences. Do not use markdown format.";
 
         var userPrompt = $"User input: {userQuery}\nDatabase Error: {errorMessage}\n\nPlease provide a short suggestion in Romanian.";

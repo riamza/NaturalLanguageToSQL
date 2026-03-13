@@ -47,7 +47,15 @@ public class QueryHistoryService : IQueryHistoryService
     {
         return await _dbContext.QueryHistories
             .OrderByDescending(q => q.CreatedAtUtc)
-            .Take(50)
             .ToListAsync();
+    }
+
+    public async Task<QueryHistory?> GetCachedSuccessfulQueryAsync(string prompt)
+    {
+        var standardizedPrompt = prompt.Trim().ToLowerInvariant();
+        return await _dbContext.QueryHistories
+            .Where(q => q.IsSuccessful && q.Prompt.Trim().ToLower() == standardizedPrompt && !string.IsNullOrEmpty(q.GeneratedSql))
+            .OrderByDescending(q => q.CreatedAtUtc)
+            .FirstOrDefaultAsync();
     }
 }

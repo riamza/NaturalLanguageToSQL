@@ -15,6 +15,7 @@ public class QueryOrchestratorService : IQueryOrchestratorService
     private readonly ISqlBuilder _sqlBuilder;
     private readonly IQueryExecutionService _queryExecutionService;
     private readonly IQueryHistoryService _historyService;
+    private readonly IDatabaseSchemaService _schemaService;
     private readonly ILogger<QueryOrchestratorService> _logger;
 
     public QueryOrchestratorService(
@@ -23,6 +24,7 @@ public class QueryOrchestratorService : IQueryOrchestratorService
         ISqlBuilder sqlBuilder,
         IQueryExecutionService queryExecutionService,
         IQueryHistoryService historyService,
+        IDatabaseSchemaService schemaService,
         ILogger<QueryOrchestratorService> logger)
     {
         _nlpProcessor = nlpProcessor;
@@ -30,6 +32,7 @@ public class QueryOrchestratorService : IQueryOrchestratorService
         _sqlBuilder = sqlBuilder;
         _queryExecutionService = queryExecutionService;
         _historyService = historyService;
+        _schemaService = schemaService;
         _logger = logger;
     }
 
@@ -43,6 +46,26 @@ public class QueryOrchestratorService : IQueryOrchestratorService
 
         try
         {
+            var cachedQuery = await _historyService.GetCachedSuccessfulQueryAsync(prompt);
+            if (cachedQuery != null && !string.IsNullOrEmpty(cachedQuery.GeneratedSql))
+            {
+                _logger.LogInformation("Cache hit for prompt: '{Prompt}' -> Executing SQL: {Sql}", prompt, cachedQuery.GeneratedSql);
+                
+                // Dacă este din cache, bypassăm LLM și folosim direct SQL-ul precedent
+                var results = await _queryExecutionService.ExecuteQueryAsync(cachedQuery.GeneratedSql, new Dictionary<string, object>());
+                stopwatch.Stop();
+                
+                var historyId = await _historyService.LogQueryAsync(prompt, cachedQuery.GeneratedSql, stopwatch.ElapsedMilliseconds, true, null);
+                
+                return OrchestratorResponse<AskResult>.Success(new AskResult
+                {
+                    Data = results,
+                    GeneratedSql = cachedQuery.GeneratedSql,
+                    ExecutionTimeMs = stopwatch.ElapsedMilliseconds,
+                    HistoryId = historyId
+                });
+            }
+
             var ir = await _nlpProcessor.TranslateToIrAsync(prompt);
 
             if (ir.Action == "ERROR")
@@ -149,12 +172,14 @@ public class QueryOrchestratorService : IQueryOrchestratorService
         var results = await _queryExecutionService.ExecuteQueryAsync(sql, parameters);
         stopwatch.Stop();
 
-        var historyId = await _historyService.LogQueryAsync(prompt, sql, stopwatch.ElapsedMilliseconds, true, null);
+        var readableSql = GetReadableSql(sql, parameters);
+
+        var historyId = await _historyService.LogQueryAsync(prompt, readableSql, stopwatch.ElapsedMilliseconds, true, null);
 
         return OrchestratorResponse<AskResult>.Success(new AskResult
         {
             Data = results,
-            GeneratedSql = sql,
+            GeneratedSql = readableSql,
             ExecutionTimeMs = stopwatch.ElapsedMilliseconds,
             HistoryId = historyId
         });
@@ -167,14 +192,22 @@ public class QueryOrchestratorService : IQueryOrchestratorService
 
         var errorMsg = ex.InnerException != null ? ex.InnerException.Message : ex.Message;
         
-        if (!ex.Message.StartsWith("LLM Error"))
+        if (!errorMsg.Contains("LLM error") && !errorMsg.Contains("TooManyRequests"))
         {
-            var aiSuggestion = await _nlpProcessor.GetErrorSuggestionAsync(errorMsg, prompt);
-            errorMsg = $"Eroare SQL: {errorMsg}\n\n**Sugestie AI:** {aiSuggestion}";
+            try
+            {
+                var schemaContext = await _schemaService.GetDatabaseSchemaDescriptionAsync();
+                var aiSuggestion = await _nlpProcessor.GetErrorSuggestionAsync(errorMsg, prompt, schemaContext);
+                errorMsg = $"Eroare SQL: {errorMsg}\n\n**Sugestie AI:** {aiSuggestion}";
+            }
+            catch (Exception aiEx)
+            {
+                _logger.LogWarning(aiEx, "Failed to get AI suggestion for error.");
+            }
         }
         else
         {
-            errorMsg = ex.Message;
+            errorMsg = $"Eroare LLM API: {errorMsg}";
         }
 
         await _historyService.LogQueryAsync(prompt, currentSqlBase, stopwatch.ElapsedMilliseconds, false, errorMsg);
