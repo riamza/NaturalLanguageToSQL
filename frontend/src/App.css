@@ -296,7 +296,6 @@ button:disabled {
   display: block;
 }
 
-/* RESULTS & ACTIONS */
 .results-wrapper {
   display: flex;
   flex-direction: column;
@@ -414,7 +413,6 @@ tr:hover td {
   border: 1px dashed var(--border);
 }
 
-/* Error Displays & Reface Button */
 .error-panel {
   display: flex;
   flex-direction: column;
@@ -629,8 +627,6 @@ tr:hover td {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
-
-/* NEW PREMIUM STYLES */
 
 .premium-title {
   font-family: "Clash Display", sans-serif;
@@ -1119,4 +1115,3 @@ tr:hover td {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
