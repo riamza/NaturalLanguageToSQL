@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Application.Interfaces;
 using Core.Models;
 using Infrastructure.Data;
@@ -15,6 +16,11 @@ public class ValidationEngine : IValidationEngine
     {
         "=", ">", "<", ">=", "<=", "<>", "!=", "LIKE", "ILIKE", "IN", "NOT IN", "IS NULL", "IS NOT NULL"
     };
+
+    private static readonly Regex SafeIdentifierRegex = new(@"^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.Compiled);
+
+    private static bool IsSafeIdentifier(string? identifier)
+        => !string.IsNullOrWhiteSpace(identifier) && SafeIdentifierRegex.IsMatch(identifier.Trim().Trim('"'));
 
     public ValidationEngine(ApplicationDbContext dbContext, ILogger<ValidationEngine> logger)
     {
@@ -78,40 +84,68 @@ public class ValidationEngine : IValidationEngine
             return (true, string.Empty);
         }
 
+        foreach (var join in ir.Joins)
+        {
+            var upperType = join.Type?.ToUpperInvariant();
+            if (upperType != "INNER" && upperType != "LEFT" && upperType != "RIGHT" && upperType != "FULL")
+                return (false, $"Tip de JOIN nepermis: '{join.Type}'.");
+
+            if (!IsSafeIdentifier(join.Table))
+                return (false, $"Nume de tabelă invalid în JOIN: '{join.Table}'.");
+
+            var joinCheck = SqlExpressionGuard.ValidateJoinCondition(join.Condition, validColumns);
+            if (!joinCheck.IsValid)
+                return (false, $"Condiție de JOIN nesigură: {joinCheck.Error}");
+        }
+
         if (ir.Action == "UPDATE")
         {
             foreach (var clause in ir.SetClauses)
             {
                 if (!validColumns.Contains(clause.Column))
                     return (false, $"Disallowed or non-existent column '{clause.Column}' in UPDATE SET clause.");
+
+                if (clause.IsExpression)
+                {
+                    var exprCheck = SqlExpressionGuard.Validate(clause.Value?.ToString(), validColumns);
+                    if (!exprCheck.IsValid)
+                        return (false, $"Expresie nesigură în clauza SET pentru '{clause.Column}': {exprCheck.Error}");
+                }
             }
         }
 
         foreach (var col in ir.SelectColumns)
         {
-            if (col == "*") continue;
-            
-            // If it has aggregates or prefixes (JOINS), allow it
-            if (col.Contains("(") || col.Contains(" AS ") || col.Contains(".")) continue;
+            var selCheck = SqlExpressionGuard.ValidateSelectColumn(col, validColumns);
+            if (!selCheck.IsValid)
+                return (false, selCheck.Error);
+        }
 
-            if (!validColumns.Contains(col))
-            {
-                return (false, $"Disallowed or non-existent column '{col}' in SELECT clause.");
-            }
+        foreach (var col in ir.GroupBy)
+        {
+            var grpCheck = SqlExpressionGuard.ValidateSelectColumn(col, validColumns);
+            if (!grpCheck.IsValid)
+                return (false, $"Expresie nesigură în GROUP BY: {grpCheck.Error}");
         }
 
         foreach (var clause in ir.WhereClauses)
         {
+            if (!AllowedOperators.Contains(clause.Operator))
+            {
+                return (false, $"Operator '{clause.Operator}' is not permitted for security reasons.");
+            }
+
+            if (clause.IsExpression)
+            {
+                var exprCheck = SqlExpressionGuard.Validate(clause.Value?.ToString(), validColumns);
+                if (!exprCheck.IsValid)
+                    return (false, $"Expresie nesigură în clauza WHERE pentru '{clause.Column}': {exprCheck.Error}");
+            }
+
             if (clause.Column.Contains(".")) continue; // Allow foreign table where clause filtering if joined.
 
             if (!validColumns.Contains(clause.Column))
-
                 return (false, $"Disallowed or non-existent column '{clause.Column}' in WHERE clause.");
-
-            if (!AllowedOperators.Contains(clause.Operator))
-            {
-                 return (false, $"Operator '{clause.Operator}' is not permitted for security reasons.");
-            }
         }
 
         foreach (var order in ir.OrderClauses)
