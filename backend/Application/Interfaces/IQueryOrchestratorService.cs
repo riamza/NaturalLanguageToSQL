@@ -39,5 +39,5 @@ public class ExecuteApprovedResult
 public interface IQueryOrchestratorService
 {
     Task<OrchestratorResponse<AskResult>> AskAsync(string prompt);
-    Task<OrchestratorResponse<ExecuteApprovedResult>> ExecuteApprovedAsync(QueryIr ir, string originalPrompt);
+    Task<OrchestratorResponse<ExecuteApprovedResult>> ExecuteApprovedAsync(QueryIr ir, string originalPrompt, string? editedSql = null);
 }

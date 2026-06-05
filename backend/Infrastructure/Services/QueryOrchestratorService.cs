@@ -51,7 +51,6 @@ public class QueryOrchestratorService : IQueryOrchestratorService
             {
                 _logger.LogInformation("Cache hit for prompt: '{Prompt}' -> Executing SQL: {Sql}", prompt, cachedQuery.GeneratedSql);
                 
-                // Dacă este din cache, bypassăm LLM și folosim direct SQL-ul precedent
                 var results = await _queryExecutionService.ExecuteQueryAsync(cachedQuery.GeneratedSql, new Dictionary<string, object>());
                 stopwatch.Stop();
                 
@@ -96,15 +95,28 @@ public class QueryOrchestratorService : IQueryOrchestratorService
         }
     }
 
-    public async Task<OrchestratorResponse<ExecuteApprovedResult>> ExecuteApprovedAsync(QueryIr ir, string originalPrompt)
+    public async Task<OrchestratorResponse<ExecuteApprovedResult>> ExecuteApprovedAsync(QueryIr ir, string originalPrompt, string? editedSql = null)
     {
         var stopwatch = Stopwatch.StartNew();
         string currentSqlBase = "Unknown SQL (Failed to build)";
         
         try
         {
-            var (sql, parameters) = _sqlBuilder.BuildSql(ir);
-            currentSqlBase = GetReadableSql(sql, parameters);
+            string sql;
+            Dictionary<string, object> parameters;
+
+            if (!string.IsNullOrWhiteSpace(editedSql))
+            {
+                sql = editedSql;
+                parameters = new Dictionary<string, object>();
+                currentSqlBase = editedSql;
+                _logger.LogInformation("Executing user-edited approved SQL: {Sql}", sql);
+            }
+            else
+            {
+                (sql, parameters) = _sqlBuilder.BuildSql(ir);
+                currentSqlBase = GetReadableSql(sql, parameters);
+            }
 
             var results = await _queryExecutionService.ExecuteQueryAsync(sql, parameters);
             stopwatch.Stop();

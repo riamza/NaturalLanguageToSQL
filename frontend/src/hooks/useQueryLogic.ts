@@ -85,10 +85,15 @@ export function useQueryLogic(onSuccess?: () => void) {
     await executeSearch(overridePrompt || prompt);
   };
 
-  const handleApprove = async () => {
+  const handleApprove = async (editedSql?: string) => {
     if (!pendingApproval) return;
     setLoading(true);
     setError("");
+
+    const sqlWasEdited =
+      typeof editedSql === "string" &&
+      editedSql.trim() !== "" &&
+      editedSql.trim() !== pendingApproval.sql.trim();
 
     try {
       const response = await axios.post(
@@ -96,6 +101,7 @@ export function useQueryLogic(onSuccess?: () => void) {
         {
           ir: pendingApproval.ir,
           originalPrompt: pendingApproval.originalPrompt,
+          editedSql: sqlWasEdited ? editedSql : null,
         }
       );
 

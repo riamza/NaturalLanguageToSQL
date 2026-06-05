@@ -502,6 +502,53 @@ tr:hover td {
 .btn-cancel:hover:not(:disabled) {
   background-color: #b91c1c;
 }
+.btn-edit {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  background-color: transparent;
+  color: #eab308;
+  border: 1px solid #eab308;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.btn-edit:hover:not(:disabled) {
+  background-color: #eab308;
+  color: #1f2937;
+}
+.btn-edit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.approval-sql-edit {
+  width: 100%;
+  margin-top: 0.75rem;
+  padding: 0.85rem 1rem;
+  font-family: "Fira Code", "Consolas", "Courier New", monospace;
+  font-size: 0.9rem;
+  line-height: 1.5;
+  color: #e2e8f0;
+  background-color: #0f172a;
+  border: 1px solid #eab308;
+  border-radius: 8px;
+  resize: vertical;
+  box-sizing: border-box;
+  white-space: pre;
+  overflow-x: auto;
+}
+.approval-sql-edit:focus {
+  outline: none;
+  border-color: #facc15;
+  box-shadow: 0 0 0 2px rgba(234, 179, 8, 0.25);
+}
+.approval-edit-hint {
+  margin: 0.6rem 0 0;
+  font-size: 0.82rem;
+  color: #eab308;
+}
 
 /* History Popup Modal */
 .modal-overlay {
